@@ -1,0 +1,10 @@
+__pycache__/
+*.joblib
+data/raw/*
+data/processed/*
+results/**/*.png
+results/**/*.json
+results/**/*.csv
+results/**/*.txt
+.venv/
+venv/
