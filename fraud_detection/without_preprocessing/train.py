@@ -22,7 +22,7 @@ def main():
     X_train, X_test, y_train, y_test = get_train_test_split(df)
     logger.info(f"Train size: {X_train.shape}, Test size: {X_test.shape}")
     
-    model = get_model()
+    model = get_model(y_train=y_train)
     logger.info(f"Training {model.__class__.__name__} model...")
     model.fit(X_train, y_train)
     

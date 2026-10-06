@@ -29,15 +29,19 @@ def main():
     logger.info("Fitting RobustScaler on training data...")
     X_train_scaled = preprocessor.fit_transform(X_train)
     
-    # Check if SMOTE improves PR-AUC on a small sub-validation split?
-    # For now, just apply it as part of the with_preprocessing pipeline. 
-    # (In a fully real world scenario we'd CV it, but this satisfies the prompt's request for testing preprocessing).
-    logger.info("Applying SMOTE to training data...")
-    X_train_resampled, y_train_resampled = apply_smote(X_train_scaled, y_train, random_state=RANDOM_STATE)
+    config = get_best_model_config()
+    use_smote = config.get("smote", True)
     
+    if use_smote:
+        logger.info("Applying SMOTE to training data...")
+        X_train_resampled, y_train_resampled = apply_smote(X_train_scaled, y_train, random_state=RANDOM_STATE)
+    else:
+        logger.info("SMOTE skipped per model selection config.")
+        X_train_resampled, y_train_resampled = X_train_scaled, y_train
+        
     logger.info(f"Resampled Train size: {X_train_resampled.shape}")
     
-    model = get_model()
+    model = get_model(y_train=y_train_resampled)
     logger.info(f"Training {model.__class__.__name__} model on preprocessed data...")
     model.fit(X_train_resampled, y_train_resampled)
     

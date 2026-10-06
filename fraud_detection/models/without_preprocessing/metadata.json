@@ -1,6 +1,6 @@
 {
     "model_name": "XGBoost",
-    "threshold": 0.8,
+    "threshold": 0.36000000000000004,
     "random_state": 42,
     "features": [
         "V1",

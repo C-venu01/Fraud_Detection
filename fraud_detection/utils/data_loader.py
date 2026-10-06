@@ -8,6 +8,7 @@ logger = get_logger(__name__)
 
 def load_data() -> pd.DataFrame:
     """Loads the credit card fraud dataset. Downloads it if not present locally."""
+    from sklearn.datasets import fetch_openml
     csv_path = RAW_DATA_DIR / "creditcard.csv"
     
     if csv_path.exists():
@@ -15,7 +16,6 @@ def load_data() -> pd.DataFrame:
         df = pd.read_csv(csv_path)
     else:
         logger.info("Dataset not found locally. Downloading from OpenML (this may take a minute)...")
-        # dataset ID 1597 is the credit card fraud dataset, but it's safer to fetch by name
         data = fetch_openml(name='creditcard', version=1, parser='auto', as_frame=True)
         df = data.frame
         logger.info(f"Saving downloaded dataset to {csv_path}")
@@ -56,9 +56,8 @@ def get_train_test_split(df: pd.DataFrame):
     if TARGET_COLUMN in df.columns:
         df[TARGET_COLUMN] = pd.to_numeric(df[TARGET_COLUMN])
         
-    numeric_df = df.select_dtypes(include=['number'])
-    X = numeric_df.drop(columns=[TARGET_COLUMN])
-    y = numeric_df[TARGET_COLUMN]
+    y = df[TARGET_COLUMN]
+    X = df.drop(columns=[TARGET_COLUMN], errors='ignore')
     
     from utils.config import RANDOM_STATE
     X_train, X_test, y_train, y_test = train_test_split(

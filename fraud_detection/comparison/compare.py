@@ -6,9 +6,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT))
 
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.metrics import roc_curve, precision_recall_curve, auc, f1_score, confusion_matrix
-import tabulate
+from sklearn.metrics import (
+    precision_recall_curve, roc_curve, auc, 
+    confusion_matrix, matthews_corrcoef
+)
 from utils.config import RESULTS_WITHOUT_PREP, RESULTS_WITH_PREP, RESULTS_COMPARISON
 from utils.logging_utils import get_logger
 
@@ -16,14 +19,11 @@ logger = get_logger(__name__)
 
 def plot_combined_roc(y_true_wout, proba_wout, y_true_with, proba_with):
     fpr_wout, tpr_wout, _ = roc_curve(y_true_wout, proba_wout)
-    roc_auc_wout = auc(fpr_wout, tpr_wout)
-    
     fpr_with, tpr_with, _ = roc_curve(y_true_with, proba_with)
-    roc_auc_with = auc(fpr_with, tpr_with)
     
     plt.figure()
-    plt.plot(fpr_wout, tpr_wout, label=f'Without Prep (AUC = {roc_auc_wout:.4f})')
-    plt.plot(fpr_with, tpr_with, label=f'With Prep (AUC = {roc_auc_with:.4f})')
+    plt.plot(fpr_wout, tpr_wout, label=f'Without Prep (AUC = {auc(fpr_wout, tpr_wout):.4f})')
+    plt.plot(fpr_with, tpr_with, label=f'With Prep (AUC = {auc(fpr_with, tpr_with):.4f})')
     plt.plot([0, 1], [0, 1], 'k--')
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
@@ -36,9 +36,13 @@ def plot_combined_pr(y_true_wout, proba_wout, y_true_with, proba_with):
     p_wout, r_wout, _ = precision_recall_curve(y_true_wout, proba_wout)
     p_with, r_with, _ = precision_recall_curve(y_true_with, proba_with)
     
+    # Calculate PR-AUC manually if not available directly via average_precision_score here, but we just use auc() for plot
+    pr_auc_wout = auc(r_wout, p_wout)
+    pr_auc_with = auc(r_with, p_with)
+    
     plt.figure()
-    plt.plot(r_wout, p_wout, label='Without Prep')
-    plt.plot(r_with, p_with, label='With Prep')
+    plt.plot(r_wout, p_wout, label=f'Without Prep (AUC = {pr_auc_wout:.4f})')
+    plt.plot(r_with, p_with, label=f'With Prep (AUC = {pr_auc_with:.4f})')
     plt.xlabel('Recall')
     plt.ylabel('Precision')
     plt.title('Combined Precision-Recall Curve')
@@ -47,12 +51,10 @@ def plot_combined_pr(y_true_wout, proba_wout, y_true_with, proba_with):
     plt.close()
 
 def evaluate_thresholds(y_true, proba, name, output_dir):
-    thresholds = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+    thresholds = np.linspace(0.01, 0.99, 99)
     res = []
     
-    precisions = []
-    recalls = []
-    f1s = []
+    precisions, recalls, f1s, mccs = [], [], [], []
     
     for t in thresholds:
         y_pred = (proba >= t).astype(int)
@@ -60,31 +62,37 @@ def evaluate_thresholds(y_true, proba, name, output_dir):
         p = tp / (tp + fp) if (tp + fp) > 0 else 0
         r = tp / (tp + fn) if (tp + fn) > 0 else 0
         f1 = 2 * p * r / (p + r) if (p + r) > 0 else 0
+        mcc = matthews_corrcoef(y_true, y_pred)
         
         precisions.append(p)
         recalls.append(r)
         f1s.append(f1)
+        mccs.append(mcc)
         
         res.append({
-            "Threshold": t, "Precision": p, "Recall": r, "F1": f1,
+            "Threshold": t, "Precision": p, "Recall": r, "F1": f1, "MCC": mcc,
             "FPR": fp / (fp + tn) if (fp + tn) > 0 else 0,
-            "FNR": fn / (fn + tp) if (fn + tp) > 0 else 0
+            "FNR": fn / (fn + tp) if (fn + tp) > 0 else 0,
+            "TP": tp, "FP": fp, "FN": fn, "TN": tn
         })
         
     df = pd.DataFrame(res)
     df.to_csv(output_dir / "threshold_metrics.csv", index=False)
     
-    # Plot threshold curves
-    plt.figure()
-    plt.plot(thresholds, precisions, marker='o', label='Precision')
-    plt.plot(thresholds, recalls, marker='o', label='Recall')
-    plt.plot(thresholds, f1s, marker='o', label='F1')
-    plt.xlabel('Threshold')
-    plt.ylabel('Score')
-    plt.title(f'Threshold Analysis - {name}')
-    plt.legend()
-    plt.savefig(output_dir / "threshold_curves.png")
-    plt.close()
+    def plot_metric(metric_arr, title, filename):
+        plt.figure()
+        plt.plot(thresholds, metric_arr, marker='o', markersize=2)
+        plt.xlabel('Threshold')
+        plt.ylabel(title)
+        plt.title(f'{title} vs Threshold - {name}')
+        plt.grid(True)
+        plt.savefig(output_dir / filename)
+        plt.close()
+        
+    plot_metric(precisions, "Precision", "precision_vs_threshold.png")
+    plot_metric(recalls, "Recall", "recall_vs_threshold.png")
+    plot_metric(f1s, "F1 Score", "f1_vs_threshold.png")
+    plot_metric(mccs, "MCC", "mcc_vs_threshold.png")
     
     return df
 
@@ -123,9 +131,7 @@ def main():
     preds_wout = pd.read_csv(RESULTS_WITHOUT_PREP / "test_predictions.csv")
     preds_with = pd.read_csv(RESULTS_WITH_PREP / "test_predictions.csv")
     
-    # Calculate FPR and FNR for current thresholds
     for name, df_preds, metrics in [("Without", preds_wout, metrics_without), ("With", preds_with, metrics_with)]:
-        # read threshold used from metadata
         meta_path = (RESULTS_WITHOUT_PREP.parent.parent / "models" / f"{name.lower()}_preprocessing" / "metadata.json")
         with open(meta_path, "r") as f: meta = json.load(f)
         thresh = meta.get("threshold", 0.5)
@@ -135,23 +141,31 @@ def main():
         
         metrics["FPR"] = fp / (fp + tn) if (fp + tn) > 0 else 0
         metrics["FNR"] = fn / (fn + tp) if (fn + tp) > 0 else 0
+        metrics["TP"] = int(tp)
+        metrics["TN"] = int(tn)
+        metrics["FP"] = int(fp)
+        metrics["FN"] = int(fn)
         
-    metrics_names = ["Accuracy", "Precision", "Recall", "F1", "ROC-AUC", "PR-AUC", "FPR", "FNR"]
+        metrics["MCC"] = matthews_corrcoef(df_preds["y_true"], y_pred)
+        
+        # Calculate balanced accuracy
+        tpr = tp / (tp + fn) if (tp + fn) > 0 else 0
+        tnr = tn / (tn + fp) if (tn + fp) > 0 else 0
+        metrics["Balanced Accuracy"] = (tpr + tnr) / 2
+        
+    metrics_names = ["Accuracy", "Precision", "Recall", "F1", "ROC-AUC", "PR-AUC", "MCC", "Balanced Accuracy", "FPR", "FNR", "TP", "FP", "FN", "TN"]
     
     data = []
     for metric in metrics_names:
         val_without = metrics_without.get(metric, 0)
         val_with = metrics_with.get(metric, 0)
         diff = val_with - val_without
-        better = "With" if (val_with > val_without and metric not in ["FPR", "FNR"]) or (val_with < val_without and metric in ["FPR", "FNR"]) else "Without"
-        if val_with == val_without: better = "Equal"
         
         data.append({
             "Metric": metric,
-            "Without Preprocessing": round(val_without, 4),
-            "With Preprocessing": round(val_with, 4),
-            "Difference": round(diff, 4),
-            "Better": better
+            "Without Preprocessing": val_without if isinstance(val_without, int) else round(val_without, 4),
+            "With Preprocessing": val_with if isinstance(val_with, int) else round(val_with, 4),
+            "Difference": diff if isinstance(diff, int) else round(diff, 4)
         })
         
     df_comparison = pd.DataFrame(data)
@@ -179,25 +193,27 @@ def main():
     
     report = f"Selected Model: {model_name}\n\n"
     report += "Without Preprocessing:\n"
-    for m in ["PR-AUC", "Recall", "Precision", "F1"]:
+    for m in ["PR-AUC", "Recall", "Precision", "F1", "MCC"]:
         report += f"{m} = {metrics_without[m]:.4f}\n"
         
     report += "\nWith Preprocessing:\n"
-    for m in ["PR-AUC", "Recall", "Precision", "F1"]:
+    for m in ["PR-AUC", "Recall", "Precision", "F1", "MCC"]:
         report += f"{m} = {metrics_with[m]:.4f}\n"
         
     f1_diff = metrics_with["F1"] - metrics_without["F1"]
     pr_auc_diff = metrics_with["PR-AUC"] - metrics_without["PR-AUC"]
     
-    best_approach = "With Preprocessing" if f1_diff > 0 and pr_auc_diff > 0 else "Without Preprocessing"
-    if f1_diff == 0 and pr_auc_diff == 0:
-        best_approach = "Equal"
+    report += "\nComparison Conclusion:\n"
+    if metrics_without["F1"] > metrics_with["F1"] and metrics_without["Precision"] > metrics_with["Precision"]:
+        if metrics_with["Recall"] > metrics_without["Recall"]:
+            report += "Without preprocessing achieved higher precision and F1, while preprocessing achieved higher recall. Therefore the choice depends on whether minimizing false positives or minimizing missed fraud is more important."
+        else:
+            report += "Without preprocessing outperformed preprocessing across primary metrics (F1, Precision, Recall)."
+    elif metrics_with["F1"] > metrics_without["F1"]:
+        report += "Preprocessing yielded a superior F1 score and better overall balance of precision and recall."
+    else:
+        report += "The two approaches yielded mixed results. Please review the detailed threshold curves to select the best trade-off."
         
-    report += f"\nBest Approach: {best_approach}\n"
-    report += "\nOn the selected Credit Card Fraud Detection dataset, using the selected model and fixed experimental setup, "
-    report += f"preprocessing resulted in a PR-AUC of {metrics_with['PR-AUC']:.4f} compared to {metrics_without['PR-AUC']:.4f} without preprocessing. "
-    report += f"The selected model {model_name} demonstrated that {'preprocessing improved performance' if best_approach == 'With Preprocessing' else 'raw features were more robust'}."
-    
     with open(RESULTS_COMPARISON / "comparison_report.txt", "w") as f:
         f.write(report)
         
